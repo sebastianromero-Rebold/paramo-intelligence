@@ -934,7 +934,8 @@ function updateSentiment(m2, artist) {
   const topics = (r?.topics || m2.map(x=>x.topics).filter(Boolean).join(' · ')).split(' · ').filter(Boolean).slice(0,6);
   const cs = ['var(--orange)','var(--blue)','var(--purple)','var(--amber)','var(--green)','var(--red)'];
   const modeLabel = isSingle ? m2[0]?.artista || '1 artista' : m2.length + ' artistas · promedio';
-  document.getElementById('sentimentPanel').innerHTML = `
+  const _sp = document.getElementById('sentimentPanel'); if(!_sp) return;
+  _sp.innerHTML = `
     <div style="font-size:10px;color:var(--ink3);font-family:var(--mono);margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
       <span>${modeLabel.toUpperCase()}</span>
       <span style="color:var(--ink3)">${pos!==null ? pos+'%+'+(neu||0)+'%+'+(neg||0)+'% = 100%' : ''}</span>
@@ -949,10 +950,11 @@ function updateSentiment(m2, artist) {
 // ── AUDIENCE PANEL ────────────────────────────────────────────────────────────
 function updateAudiencePanel(aud, artist) {
   const items = aud.slice(0, 4);
-  document.getElementById('audiencePanel').innerHTML = items.length
+  const _ap = document.getElementById('audiencePanel'); if(!_ap) return;
+  _ap.innerHTML = items.length
     ? items.map((a,i)=>`<div class="profile-item"><div class="profile-num">${i+1}</div><div class="profile-text">${a.nombre}${a.volumen?` <span style="color:var(--ink3);font-size:11px">· ${a.volumen}</span>`:''}</div></div>`).join('')
     : `<div style="font-size:12px;color:var(--ink3)">Sin perfiles para la selección actual.</div>`;
-  document.getElementById('audArtistTag').textContent = `${aud.length} perfil${aud.length!==1?'es':''}`;
+  const _aat = document.getElementById('audArtistTag'); if(_aat) _aat.textContent = `${aud.length} perfil${aud.length!==1?'es':''}`;
 }
 
 // ── GAUGES ────────────────────────────────────────────────────────────────────
