@@ -884,8 +884,9 @@ function updateWave(m2) {
 
 // ── GENRE CHART ───────────────────────────────────────────────────────────────
 function buildGeneroChart(m2) {
+  const _elG = document.getElementById('generoChart'); if(!_elG) return;
   destroyChart('genero');
-  const ctx = document.getElementById('generoChart').getContext('2d');
+  const ctx = _elG.getContext('2d');
   const byGenero = {};
   m2.forEach(r => {
     const g = r.genero || 'Sin clasificar';
@@ -1023,7 +1024,8 @@ function buildSLSection(m2, slAll) {
   destroyChart('conv');
   const m3data = DATA.socialListening.m3;
   const sorted24 = [...m2].sort((a,b)=>(b.conv||0)-(a.conv||0)).slice(0,12);
-  const ctx = document.getElementById('convChart').getContext('2d');
+  const _elC = document.getElementById('convChart'); if(!_elC) return;
+  const ctx = _elC.getContext('2d');
   CHARTS['conv'] = new Chart(ctx, {
     type: 'bar',
     data: {
@@ -1045,7 +1047,8 @@ function buildSLSection(m2, slAll) {
 
   // Sentiment pie
   destroyChart('sentPie');
-  const ctxPie = document.getElementById('sentPieChart').getContext('2d');
+  const _elSP = document.getElementById('sentPieChart'); if(!_elSP) return;
+  const ctxPie = _elSP.getContext('2d');
   CHARTS['sentPie'] = new Chart(ctxPie, {
     type: 'doughnut',
     data: {
@@ -1115,7 +1118,8 @@ function buildFPSection(fp) {
   // Torta alcance por evento
   destroyChart('alcancePie');
   const topPie = [...fp].filter(r=>r.alcance).sort((a,b)=>b.alcance-a.alcance).slice(0,8);
-  const ctxPie = document.getElementById('alcancePieChart').getContext('2d');
+  const _elAP = document.getElementById('alcancePieChart'); if(!_elAP) return;
+  const ctxPie = _elAP.getContext('2d');
   CHARTS['alcancePie'] = new Chart(ctxPie, {
     type: 'doughnut',
     data: {
@@ -1184,7 +1188,8 @@ function buildAudSection(aud) {
   const byGen = {};
   aud.forEach(r => { const g = r.genero||'Sin clasificar'; byGen[g] = (byGen[g]||0) + 1; });
   const genLabels = Object.keys(byGen).sort((a,b)=>byGen[b]-byGen[a]);
-  const ctxAG = document.getElementById('audGeneroChart').getContext('2d');
+  const _elAG = document.getElementById('audGeneroChart'); if(!_elAG) return;
+  const ctxAG = _elAG.getContext('2d');
   CHARTS['audGenero'] = new Chart(ctxAG, {
     type: 'bar',
     data: { labels: genLabels, datasets: [{ data: genLabels.map(g=>byGen[g]), backgroundColor: genLabels.map((_,i)=>COLORS[i%COLORS.length]+'bb'), borderColor: genLabels.map((_,i)=>COLORS[i%COLORS.length]), borderWidth: 1 }] },
