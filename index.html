@@ -241,8 +241,8 @@ header{display:flex;align-items:center;justify-content:space-between;padding:0 2
 
 <div id="error-state">
   <div class="error-code">SIN CONEXIÓN A DATOS</div>
-  <div class="error-msg">Configura la URL de tu Google Apps Script en la variable <code>DATA_URL</code> dentro de este archivo.</div>
-  <div class="error-hint" id="errHint">DATA_URL no configurada</div>
+  <div class="error-msg">No se pudieron cargar los datos desde la hoja de Google.</div>
+  <div class="error-hint" id="errHint"></div>
 </div>
 
 <div id="app">
@@ -568,7 +568,10 @@ function checkAuth() {
 }
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
-const DATA_URL = 'https://script.google.com/macros/s/AKfycbzZIMYkZQE6UA-uiSjtzX51SaIfn4X3YpLHYsTbVHytjh3OS-87pdgMWcYjNCzSFh-pSA/exec';
+// Los datos se leen directo de la hoja de Google (debe estar compartida como
+// "Cualquier persona con el enlace: Lector"). Ya no se usa Apps Script.
+const SHEET_ID = '1kH0uHNIXreMahtlQOvQMLYwTc-6rfHF3IC1jxCSrqbw';
+const SHEET_GIDS = { sl: 1957874133, fp: 89578163, aud: 351914319 }; // Social Listening · Exposicion Medios · Audiencias
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
 let DATA = null;
@@ -580,42 +583,189 @@ const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto'
 
 // ── LOAD ──────────────────────────────────────────────────────────────────────
 async function loadData() {
-  if (DATA_URL === 'PLACEHOLDER_NEVER_MATCHES') {
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('error-state').style.display = 'flex';
-    document.getElementById('errHint').textContent = 'DATA_URL no configurada.';
-    return false;
-  }
-
-  // Usar un proxy CORS diferente que no usa eval y es compatible con CSP estricto
-  const proxies = [
-    url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-    url => `https://cors-anywhere.herokuapp.com/${url}`,
-    url => `https://thingproxy.freeboard.io/fetch/${url}`,
-  ];
-
-  for (const makeProxy of proxies) {
-    try {
-      const proxyUrl = makeProxy(DATA_URL);
-      console.log('[Páramo] Intentando proxy:', proxyUrl.split('?')[0]);
-      const res = await fetch(proxyUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      if (data && data.meta) {
-        DATA = data;
-        console.log('[Páramo] ✓ Cargado. Artistas:', data.meta.totalArtistas);
-        return true;
-      }
-    } catch(err) {
-      console.warn('[Páramo] Proxy falló:', err.message);
-    }
+  let hint = '';
+  try {
+    const [sl, fp, aud] = await Promise.all(['sl','fp','aud'].map(async k => {
+      const res = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${SHEET_GIDS[k]}`);
+      if (!res.ok) throw new Error('HTTP ' + res.status + ' en pestaña ' + k);
+      return parseCSV(await res.text());
+    }));
+    DATA = buildData(sl, fp, aud);
+    console.log('[Páramo] ✓ Cargado. Artistas:', DATA.meta.totalArtistas);
+    return true;
+  } catch(err) {
+    console.warn('[Páramo] Carga falló:', err.message);
+    hint = 'No se pudo leer la hoja de datos. Verifica que siga compartida con enlace (Lector).';
   }
 
   document.getElementById('loading').style.display = 'none';
   document.getElementById('error-state').style.display = 'flex';
-  document.getElementById('errHint').textContent =
-    'Todos los proxies fallaron. Considera mover el dashboard a Netlify (ver instrucciones abajo).';
+  document.getElementById('errHint').textContent = hint;
   return false;
+}
+
+// ── TRANSFORMACIÓN (antes vivía en Apps Script doGet) ─────────────────────────
+function parseCSV(text) {
+  const rows = []; let row = [], cell = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i+1] === '"') { cell += '"'; i++; } else q = false; }
+      else cell += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+    else if (c !== '\r') cell += c;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+// Algunas pestañas tienen una fila de agrupación arriba: usar la primera fila que tenga "artista"
+function splitHeader(rows) {
+  let h = rows.slice(0, 5).findIndex(r => r.some(c => /artista/i.test(c)));
+  if (h < 0) h = 0;
+  return { headers: (rows[h] || []).map(c => String(c).trim().toLowerCase()), body: rows.slice(h + 1) };
+}
+
+function bestCol(headers, candidates) {
+  const clean = s => s.replace(/[^a-záéíóúüñ\s]/gi,'').trim();
+  for (const cand of candidates)
+    for (let i = 0; i < headers.length; i++)
+      if (headers[i] === cand || clean(headers[i]) === clean(cand)) return i;
+  for (const cand of candidates) {
+    const words = cand.split(/[\s\/]+/);
+    for (let i = 0; i < headers.length; i++)
+      if (words.every(w => headers[i].includes(w))) return i;
+  }
+  for (const cand of candidates) {
+    const first = cand.split(/[\s\/]+/)[0];
+    for (let i = 0; i < headers.length; i++)
+      if (headers[i].includes(first)) return i;
+  }
+  return 0;
+}
+
+function parseNum(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = parseFloat(String(v).replace(/\./g,'').replace(/,/g,'.').replace(/[^0-9.\-]/g,''));
+  return isNaN(n) ? null : n;
+}
+
+function parsePct(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = parseFloat(String(v).replace('%','').replace(',','.').trim());
+  return isNaN(n) ? null : Math.round(n);
+}
+
+function buildData(slRows, fpRows, audRows) {
+  const txt = v => String(v || '').trim();
+  const out = {
+    meta: { generatedAt: new Date().toISOString(), nextUpdate: new Date(Date.now() + 4*24*60*60*1000).toISOString(), totalArtistas: 0, totalPerfiles: 0 },
+    socialListening: { m1: [], m2: [], m3: [] },
+    exposicionMedios: [], audiencias: [], topAlcance: [], topFP: [], alertas: [], insights: [],
+  };
+
+  // Social Listening
+  { const { headers: h, body } = splitHeader(slRows);
+    const c = {
+      artista: bestCol(h, ['artista / evento','artista','evento']), momento: bestCol(h, ['momento']),
+      fecha: bestCol(h, ['fecha de anuncio','fecha anuncio','fecha']), genero: bestCol(h, ['genero','género','genero musical','género musical']),
+      periodo: bestCol(h, ['periodo','período','periodo de tiempo']), conv: bestCol(h, ['conversaciones','conversaciones totales']),
+      alcance: bestCol(h, ['alcance']), usuarios: bestCol(h, ['usuarios','usuarios únicos']),
+      pos: bestCol(h, ['positivo','sentimiento positivo']), neu: bestCol(h, ['neutro','sentimiento neutro']), neg: bestCol(h, ['negativo','sentimiento negativo']),
+      topics: bestCol(h, ['trending','topics','temas']), link: bestCol(h, ['link','presentación','abrir']),
+    };
+    for (const r of body) {
+      const artista = txt(r[c.artista]), momento = txt(r[c.momento]);
+      if (!artista || artista === 'N/D') continue;
+      const row = {
+        artista, momento, fecha: txt(r[c.fecha]), genero: txt(r[c.genero]) || null, periodo: txt(r[c.periodo]) || null,
+        conv: parseNum(r[c.conv]), alcance: parseNum(r[c.alcance]), usuarios: parseNum(r[c.usuarios]),
+        pos: parsePct(r[c.pos]), neu: parsePct(r[c.neu]), neg: parsePct(r[c.neg]),
+        topics: txt(r[c.topics]) || null, link: txt(r[c.link]) || null,
+      };
+      const m = momento.toLowerCase();
+      if (m.includes('momento 1') || m.includes('previa') || m.includes('pre')) out.socialListening.m1.push(row);
+      else if (m.includes('momento 2') || m.includes('24')) out.socialListening.m2.push(row);
+      else if (m.includes('momento 3') || m.includes('48')) out.socialListening.m3.push(row);
+      else out.socialListening.m1.push(row);
+    }
+  }
+
+  // Exposición en medios
+  { const { headers: h, body } = splitHeader(fpRows);
+    const c = {
+      artista: bestCol(h, ['artista / evento','artista','evento']), periodo: bestCol(h, ['período','periodo','período / evento']),
+      salidas: bestCol(h, ['salidas totales','salidas']), alcance: bestCol(h, ['alcance potencial','alcance']),
+      valorFP: bestCol(h, ['valor free press','valor fp','valor']), digConv: bestCol(h, ['conversaciones digital','dig']),
+      digAlc: bestCol(h, ['alcance digital','alc digital']), tradAlc: bestCol(h, ['alcance medios trad','alcance trad']),
+      tradMed: bestCol(h, ['# medios trad','medios trad','num medios']), link: bestCol(h, ['link','ver en drive','abrir']),
+    };
+    for (const r of body) {
+      const artista = txt(r[c.artista]);
+      if (!artista) continue;
+      out.exposicionMedios.push({
+        artista, periodo: txt(r[c.periodo]) || null, salidas: parseNum(r[c.salidas]), alcance: parseNum(r[c.alcance]),
+        valorFP: parseNum(r[c.valorFP]), digConv: parseNum(r[c.digConv]), digAlc: parseNum(r[c.digAlc]),
+        tradAlc: parseNum(r[c.tradAlc]), tradMed: parseNum(r[c.tradMed]), link: txt(r[c.link]) || null,
+      });
+    }
+  }
+
+  // Audiencias
+  { const { headers: h, body } = splitHeader(audRows);
+    const c = {
+      artista: bestCol(h, ['artista / evento','artista','evento']), genero: bestCol(h, ['género musical','genero musical','género','genero']),
+      nombre: bestCol(h, ['nombre de la audiencia','nombre audiencia','nombre']), volumen: bestCol(h, ['volumen','tamaño','volumen / tamaño']),
+      pasiones: bestCol(h, ['pasiones','intereses','pasiones / intereses']), drivers: bestCol(h, ['drivers','drivers potenciales']),
+      tp: bestCol(h, ['touchpoints','rrss','medios']), link: bestCol(h, ['link','presentación','abrir']),
+    };
+    for (const r of body) {
+      const artista = txt(r[c.artista]), nombre = txt(r[c.nombre]);
+      if (!artista || !nombre) continue;
+      out.audiencias.push({
+        artista, genero: txt(r[c.genero]) || null, nombre, volumen: txt(r[c.volumen]) || null,
+        pasiones: txt(r[c.pasiones]) || null, drivers: txt(r[c.drivers]) || null,
+        touchpoints: txt(r[c.tp]) || null, link: txt(r[c.link]) || null,
+      });
+    }
+  }
+
+  // Derivados
+  const { m2, m3 } = out.socialListening;
+  const all = [...out.socialListening.m1, ...m2, ...m3, ...out.exposicionMedios, ...out.audiencias];
+  out.meta.totalArtistas = new Set(all.map(r => r.artista).filter(Boolean)).size;
+  out.meta.totalPerfiles = out.audiencias.length;
+  out.topAlcance = m2.filter(r => r.alcance).sort((a,b) => b.alcance - a.alcance).slice(0, 10);
+  out.topFP = out.exposicionMedios.filter(r => r.valorFP).sort((a,b) => b.valorFP - a.valorFP).slice(0, 10);
+  out.alertas = buildSheetAlertas(m2, out.exposicionMedios);
+  out.insights = buildSheetInsights(m2, m3, out.exposicionMedios);
+  return out;
+}
+
+function buildSheetAlertas(m2, fp) {
+  const alerts = [];
+  const neg = m2.filter(r => r.neg !== null).sort((a,b) => b.neg - a.neg);
+  if (neg[0]) alerts.push({ tipo:'danger', artista: neg[0].artista, msg: 'Sentimiento negativo más alto: ' + neg[0].neg + '% en 24h post-anuncio.' });
+  const cero = m2.filter(r => r.pos === 0);
+  if (cero.length) alerts.push({ tipo:'warning', artista: cero.map(r => r.artista).join(' · '), msg: cero.length + ' artista(s) con 0% sentimiento positivo.' });
+  const pos = m2.filter(r => r.pos > 0).sort((a,b) => b.pos - a.pos);
+  if (pos[0]) alerts.push({ tipo:'success', artista: pos[0].artista, msg: 'Mayor sentimiento positivo: ' + pos[0].pos + '%. Ventana de conversión activa.' });
+  const fpS = fp.filter(r => r.valorFP).sort((a,b) => b.valorFP - a.valorFP);
+  if (fpS[0]) alerts.push({ tipo:'info', artista: fpS[0].artista, msg: 'Mayor free press: $' + (fpS[0].valorFP/1e9).toFixed(1) + 'B COP — ' + (fpS[0].salidas||0) + ' salidas.' });
+  return alerts;
+}
+
+function buildSheetInsights(m2, m3, fp) {
+  const ins = [];
+  const topNeg = m2.filter(r => r.conv && r.neg !== null).sort((a,b) => b.neg - a.neg);
+  if (topNeg[0]) ins.push({ tipo:'sentimiento', emoji:'⚠️', titulo: topNeg[0].artista + ' — Mayor sentimiento negativo vs. volumen', genero: topNeg[0].genero || '—', desc: (topNeg[0].conv||0).toLocaleString('es-CO') + ' conversaciones con ' + topNeg[0].neg + '% negativo.', accion: 'Revisar contexto de menciones y preparar comunicación proactiva.' });
+  const topPos = m2.filter(r => r.pos > 0).sort((a,b) => b.pos - a.pos);
+  if (topPos[0]) ins.push({ tipo:'conversion', emoji:'🎯', titulo: topPos[0].artista + ' — Mayor índice de conversión potencial', genero: topPos[0].genero || '—', desc: topPos[0].pos + '% sentimiento positivo, el más alto de la BD actual.', accion: 'Activar preventa o acceso anticipado dentro de las 72h post-anuncio.' });
+  const topFP = fp.filter(r => r.valorFP).sort((a,b) => b.valorFP - a.valorFP);
+  if (topFP[0]) ins.push({ tipo:'medios', emoji:'📰', titulo: topFP[0].artista + ' — Benchmark de free press', genero: '—', desc: '$' + (topFP[0].valorFP/1e9).toFixed(1) + 'B COP con ' + (topFP[0].salidas||0) + ' salidas.', accion: 'Usar como referencia para justificar inversión en relaciones con medios.' });
+  return ins;
 }
 
 async function init() {
